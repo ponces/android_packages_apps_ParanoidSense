@@ -13,6 +13,7 @@ import android.hardware.biometrics.BiometricFaceConstants
 import android.hardware.camera2.CameraManager
 import android.os.*
 import android.util.Log
+import androidx.annotation.GuardedBy
 import androidx.core.content.ContextCompat
 
 import co.aospa.sense.controller.FaceAuthenticationController
@@ -32,6 +33,8 @@ import vendor.aospa.biometrics.face.ISenseServiceReceiver
 
 class SenseService : Service() {
 
+    private val lock = Any()
+
     private lateinit var mIdleTimeoutIntent: PendingIntent
     private lateinit var mLockoutTimeoutIntent: PendingIntent
     private var mAlarmManager: AlarmManager? = null
@@ -45,8 +48,10 @@ class SenseService : Service() {
     private var mCameraId = 0
     private var mChallengeCount = 0
     private var mUserId = 0
+    @GuardedBy("lock")
     private var mAuthenticationErrorCount = 0
     private var mAuthenticationErrorThrottleCount = 0
+    @GuardedBy("lock")
     private var mLockoutType = LOCKOUT_TYPE_DISABLED
     private var mChallenge: Long = 0
     private var mEnrollToken: ByteArray? = null
@@ -62,13 +67,13 @@ class SenseService : Service() {
                 Log.d(TAG, "OnReceive intent = $intent")
             }
             when (action) {
-                ALARM_TIMEOUT_FREEZED -> synchronized(mLockoutType) {
+                ALARM_TIMEOUT_FREEZED -> synchronized(lock) {
                     mLockoutType = LOCKOUT_TYPE_IDLE
                 }
                 ALARM_FAIL_TIMEOUT_LOCKOUT -> {
                     cancelLockoutTimer()
-                    synchronized(mLockoutType) { mLockoutType = LOCKOUT_TYPE_DISABLED }
-                    synchronized(mAuthenticationErrorCount) { mAuthenticationErrorCount = 0 }
+                    synchronized(lock) { mLockoutType = LOCKOUT_TYPE_DISABLED }
+                    synchronized(lock) { mAuthenticationErrorCount = 0 }
                 }
                 Intent.ACTION_SCREEN_OFF, Intent.ACTION_USER_PRESENT -> {
                     mUserUnlocked = action == Intent.ACTION_USER_PRESENT
@@ -367,7 +372,7 @@ class SenseService : Service() {
         if (mOnLockoutTimer || mLockoutType != LOCKOUT_TYPE_DISABLED) {
             return
         }
-        synchronized(mAuthenticationErrorCount) {
+        synchronized(lock) {
             mAuthenticationErrorCount += 1
             mAuthenticationErrorThrottleCount += 1
             if (Util.IS_DEBUG_LOGGING) Log.d(
@@ -380,13 +385,13 @@ class SenseService : Service() {
                 mLockoutType = LOCKOUT_TYPE_PERMANENT
                 cancelLockoutTimer()
             } else if (mAuthenticationErrorThrottleCount == MAX_FAILED_ATTEMPTS_LOCKOUT_PERMANENT) {
-                synchronized(mLockoutType) {
+                synchronized(lock) {
                     Log.d(TAG, "Too many attempts, lockout permanent")
                     mLockoutType = LOCKOUT_TYPE_PERMANENT
                     cancelLockoutTimer()
                 }
             } else if (mAuthenticationErrorCount == MAX_FAILED_ATTEMPTS_LOCKOUT_TIMED) {
-                synchronized(mLockoutType) {
+                synchronized(lock) {
                     Log.d(TAG, "Too many attempts, lockout for 30s")
                     mLockoutType = LOCKOUT_TYPE_TIMED
                 }
@@ -409,7 +414,7 @@ class SenseService : Service() {
     }
 
     private fun resetLockoutCount() {
-        synchronized(mAuthenticationErrorCount) {
+        synchronized(lock) {
             mAuthenticationErrorCount = 0
             mAuthenticationErrorThrottleCount = 0
             mLockoutType = LOCKOUT_TYPE_DISABLED
